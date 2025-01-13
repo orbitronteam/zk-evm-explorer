@@ -18,7 +18,13 @@ defmodule Explorer.Migrator.HeavyIndexOperation do
   @doc """
   This callback checks DB index operation (creation or deletion) status.
   """
-  @callback check_index_operation_status() :: :finished | :in_progress | :unknown
+  @callback check_index_operation_progress() ::
+              :finished_or_not_started | :finished | :unknown | {:in_progress, String.t()}
+
+  @doc """
+  This callback checks existence of DB index.
+  """
+  @callback index_exists?() :: boolean()
 
   @doc """
     This callback updates the migration completion status in the cache.
@@ -72,17 +78,28 @@ defmodule Explorer.Migrator.HeavyIndexOperation do
             {:stop, :normal, state}
 
           migration_status ->
-            MigrationStatus.set_status(migration_name(), "started")
-            SQL.query!(Repo, init_query(), [])
-            schedule_next_status_check()
+            with {:index_operation_progress, status} when status in [:finished_or_not_started, :finished] <-
+                   {:index_operation_progress, check_index_operation_progress()},
+                 {:index_exists?, false} <- {:index_exists?, index_exists?()} do
+              MigrationStatus.set_status(migration_name(), "started")
+              SQL.query!(Repo, init_query(), [])
+              schedule_next_status_check()
+            else
+              {:index_operation_progress, _status} ->
+                schedule_next_status_check()
+
+              {:index_exists?, true} ->
+                MigrationStatus.set_status(migration_name(), "completed")
+            end
+
             {:noreply, (migration_status && migration_status.meta) || %{}}
         end
       end
 
       @impl true
-      def handle_info(:check_index_operation_status, state) do
-        case check_index_operation_status() do
-          :finished ->
+      def handle_info(:check_index_operation_progress, state) do
+        case check_index_operation_progress() do
+          status when status in [:finished_or_not_started, :finished] ->
             update_cache()
             MigrationStatus.set_status(migration_name(), "completed")
             {:stop, :normal, state}
@@ -95,13 +112,13 @@ defmodule Explorer.Migrator.HeavyIndexOperation do
       end
 
       @spec run_task() :: any()
-      defp run_task, do: Task.async(fn -> check_index_operation_status() end)
+      defp run_task, do: Task.async(fn -> check_index_operation_progress() end)
 
       defp schedule_next_status_check(timeout \\ nil) do
         Process.send_after(
           self(),
-          :check_index_operation_status,
-          timeout || Application.get_env(:explorer, __MODULE__)[:timeout] || :timer.minutes(10)
+          :check_index_operation_progress,
+          timeout || Application.get_env(:explorer, __MODULE__)[:check_interval] || :timer.minutes(10)
         )
       end
     end

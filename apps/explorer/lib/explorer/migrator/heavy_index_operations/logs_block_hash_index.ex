@@ -18,13 +18,18 @@ defmodule Explorer.Migrator.HeavyIndexOperations.AddLogsBlockHashIndex do
   @impl HeavyIndexOperation
   def init_query do
     """
-      CREATE INDEX CONCURRENTLY #{@index_name} on logs (block_hash);
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS #{@index_name} on logs (block_hash);
     """
   end
 
   @impl HeavyIndexOperation
-  def check_index_operation_status do
-    HeavyIndexOperationHelper.check_index_creation_status(@index_name)
+  def check_index_operation_progress do
+    HeavyIndexOperationHelper.check_index_creation_progress(@index_name)
+  end
+
+  @impl HeavyIndexOperation
+  def index_exists? do
+    HeavyIndexOperationHelper.index_exists?(@index_name)
   end
 
   @impl HeavyIndexOperation
